@@ -168,11 +168,6 @@ export class DragRef<T = any> {
   private _rootElement: HTMLElement;
 
   /**
-   * Nearest ancestor SVG, relative to which coordinates are calculated if dragging SVGElement
-   */
-  private _ownerSVGElement: SVGSVGElement | null;
-
-  /**
    * Inline style value of `-webkit-tap-highlight-color` at the time the
    * dragging was started. Used to restore the value once we're done dragging.
    */
@@ -412,10 +407,6 @@ export class DragRef<T = any> {
       this._rootElement = element;
     }
 
-    if (typeof SVGElement !== 'undefined' && this._rootElement instanceof SVGElement) {
-      this._ownerSVGElement = this._rootElement.ownerSVGElement;
-    }
-
     return this;
   }
 
@@ -469,7 +460,7 @@ export class DragRef<T = any> {
     this._dropContainer = undefined;
     this._resizeSubscription.unsubscribe();
     this._parentPositions.clear();
-    this._boundaryElement = this._rootElement = this._ownerSVGElement = this._placeholderTemplate =
+    this._boundaryElement = this._rootElement = this._placeholderTemplate =
         this._previewTemplate = this._anchor = this._parentDragRef = null!;
   }
 
@@ -659,23 +650,65 @@ export class DragRef<T = any> {
     this._lastKnownPointerPosition = pointerPosition;
     this._updatePointerDirectionDelta(constrainedPointerPosition);
 
-    if (this._dropContainer) {
-      this._updateActiveDropContainer(constrainedPointerPosition, pointerPosition);
-    } else {
+    let transformRatioX = 1.0;
+      let transformRatioY = 1.0;
+
+      if (typeof SVGElement !== 'undefined' && this._rootElement instanceof SVGElement) {
+        const svgElement = this._rootElement.ownerSVGElement;
+        const svgViewBoxRect = svgElement?.viewBox.baseVal;
+
+        if (svgElement?.clientWidth !== 0 && svgElement?.clientHeight !== 0) {
+          const preserveAspectRatio = svgElement!.preserveAspectRatio;
+          const aspectRatio = svgViewBoxRect!.width / svgViewBoxRect!.height;
+          let widthRatio = svgViewBoxRect!.width / svgElement!.clientWidth;
+          let heightRatio = svgViewBoxRect!.height / svgElement!.clientHeight;
+          if (preserveAspectRatio.baseVal.align !== preserveAspectRatio.baseVal.SVG_PRESERVEASPECTRATIO_NONE) {
+            if (preserveAspectRatio.baseVal.meetOrSlice == preserveAspectRatio.baseVal.SVG_MEETORSLICE_MEET) {
+              // meet (scale-down)
+              if (widthRatio > heightRatio) {
+                transformRatioX = widthRatio;
+                const height = svgElement!.clientWidth / aspectRatio;
+                transformRatioY = svgViewBoxRect!.height / height;
+                
+              } else if (heightRatio > widthRatio) {
+                transformRatioY = heightRatio;
+                const width = svgElement!.clientHeight * aspectRatio;
+                transformRatioX = svgViewBoxRect!.width / width;
+              }
+            } else {
+              // slice (scale-up)
+              if (widthRatio > heightRatio) {
+                
+                transformRatioY = heightRatio;
+                const width = svgElement!.clientHeight * aspectRatio;
+                transformRatioX = svgViewBoxRect!.width / width;
+                
+              } else if (heightRatio > widthRatio) {
+                transformRatioX = widthRatio;
+                const height = svgElement!.clientWidth / aspectRatio;
+                transformRatioY = svgViewBoxRect!.height / height;
+              }
+            }
+          } else {
+            if (svgViewBoxRect?.width !== 0) {
+              transformRatioX = widthRatio;
+            }
+          
+            if (svgViewBoxRect?.height !== 0) {
+              transformRatioY = heightRatio;
+            }
+          }
+        }
+      }
+      
       const activeTransform = this._activeTransform;
       activeTransform.x =
-          constrainedPointerPosition.x - this._pickupPositionOnPage.x + this._passiveTransform.x;
+          (constrainedPointerPosition.x - this._pickupPositionOnPage.x) * transformRatioX + this._passiveTransform.x;
       activeTransform.y =
-          constrainedPointerPosition.y - this._pickupPositionOnPage.y + this._passiveTransform.y;
-
+          (constrainedPointerPosition.y - this._pickupPositionOnPage.y) * transformRatioY + this._passiveTransform.y;
+      
       this._applyRootElementTransform(activeTransform.x, activeTransform.y);
 
-      // Apply transform as attribute if dragging and svg element to work for IE
-      if (typeof SVGElement !== 'undefined' && this._rootElement instanceof SVGElement) {
-        const appliedTransform = `translate(${activeTransform.x} ${activeTransform.y})`;
-        this._rootElement.setAttribute('transform', appliedTransform);
-      }
-    }
 
     // Since this event gets fired for every pixel while dragging, we only
     // want to fire it if the consumer opted into it. Also we have to
@@ -1106,22 +1139,10 @@ export class DragRef<T = any> {
         // we can get away with it. See https://bugzilla.mozilla.org/show_bug.cgi?id=1615824.
         (event.touches[0] || event.changedTouches[0] || {pageX: 0, pageY: 0}) : event;
 
-    const x = point.pageX - scrollPosition.left;
-    const y = point.pageY - scrollPosition.top;
-
-    // if dragging SVG element, try to convert from the screen coordinate system to the SVG
-    // coordinate system
-    if (this._ownerSVGElement) {
-      const svgMatrix = this._ownerSVGElement.getScreenCTM();
-      if (svgMatrix) {
-        const svgPoint = this._ownerSVGElement.createSVGPoint();
-        svgPoint.x = x;
-        svgPoint.y = y;
-        return svgPoint.matrixTransform(svgMatrix.inverse());
-      }
-    }
-
-    return {x, y};
+        return {
+          x: point.pageX - scrollPosition.left,
+          y: point.pageY - scrollPosition.top
+        };
   }
 
 
